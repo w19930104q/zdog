@@ -25,6 +25,13 @@ var Zdog = {};
 
 Zdog.TAU = Math.PI * 2;
 
+// max renderable coordinate magnitude. Geometry with coordinates beyond
+// this guard band, or with non-finite (NaN/Infinity) coordinates, cannot
+// be reliably projected to canvas/SVG. It is clipped — treated like
+// geometry crossing the camera near plane — so it cannot corrupt
+// bounds, sorting, or subsequent frames with NaN
+Zdog.maxCoordinate = 1000000000;
+
 Zdog.extend = function( a, b ) {
   for ( var prop in b ) {
     a[ prop ] = b[ prop ];
@@ -378,6 +385,15 @@ Vector.prototype.magnitude2d = function() {
   return getMagnitudeSqrt( sum );
 };
 
+// check if vector cannot be reliably projected: any coordinate is
+// non-finite (NaN/Infinity) or beyond the maxCoordinate guard band
+Vector.prototype.isClipped = function() {
+  var max = utils.maxCoordinate;
+  return !isFinite( this.x ) || !isFinite( this.y ) || !isFinite( this.z ) ||
+    Math.abs( this.x ) > max || Math.abs( this.y ) > max ||
+    Math.abs( this.z ) > max;
+};
+
 Vector.prototype.copy = function() {
   return new Vector( this );
 };
@@ -405,12 +421,17 @@ return Vector;
 
 var TAU = utils.TAU;
 var onePoint = { x: 1, y: 1, z: 1 };
+// incrementing id, used as tie-breaker for stable sorting
+var idCount = 0;
 
 function Anchor( options ) {
   this.create( options || {} );
 }
 
 Anchor.prototype.create = function( options ) {
+  // unique id within session, keeps sort order deterministic
+  this.id = idCount;
+  idCount += 1;
   this.children = [];
   // set defaults & options
   utils.extend( this, this.constructor.defaults );
@@ -504,8 +525,22 @@ Anchor.prototype.updateGraph = function() {
   this.flatGraph.sort( Anchor.shapeSorter );
 };
 
+// total-order sorter, stable on every engine:
+// clipped items (non-finite sortValue) sort to the end,
+// equal sort values (e.g. zero-depth scenes) keep creation order
 Anchor.shapeSorter = function( a, b ) {
-  return a.sortValue - b.sortValue;
+  var isFiniteA = isFinite( a.sortValue );
+  var isFiniteB = isFinite( b.sortValue );
+  if ( !isFiniteA || !isFiniteB ) {
+    if ( isFiniteA ) {
+      return -1;
+    }
+    if ( isFiniteB ) {
+      return 1;
+    }
+    return a.id - b.id;
+  }
+  return a.sortValue - b.sortValue || a.id - b.id;
 };
 
 // custom getter to check for flatGraph before using it
@@ -540,7 +575,9 @@ Anchor.prototype.addChildFlatGraph = function( flatGraph ) {
 };
 
 Anchor.prototype.updateSortValue = function() {
-  this.sortValue = this.renderOrigin.z;
+  this.isClipped = this.renderOrigin.isClipped();
+  // clipped items are sorted to the end of the graph
+  this.sortValue = this.isClipped ? Infinity : this.renderOrigin.z;
 };
 
 // ----- render ----- //
@@ -617,7 +654,7 @@ function getSubclass( Super ) {
     Item.optionKeys = Super.optionKeys.slice( 0 );
     // add defaults keys to optionKeys, dedupe
     Object.keys( Item.defaults ).forEach( function( key ) {
-      if ( !Item.optionKeys.indexOf( key ) != 1 ) {
+      if ( Item.optionKeys.indexOf( key ) == -1 ) {
         Item.optionKeys.push( key );
       }
     } );
@@ -1209,6 +1246,10 @@ Shape.prototype.transform = function( translation, rotation, scale ) {
 };
 
 Shape.prototype.updateSortValue = function() {
+  // clip items with non-finite or extreme coordinates, so they cannot
+  // corrupt sorting, bounds, or the renderer with NaN
+  this.isClipped = this.renderOrigin.isClipped() ||
+    this.renderFront.isClipped();
   // sort by average z of all points
   // def not geometrically correct, but works for me
   var pointCount = this.pathCommands.length;
@@ -1222,16 +1263,19 @@ Shape.prototype.updateSortValue = function() {
 
   var sortValueTotal = 0;
   for ( var i = 0; i < pointCount; i++ ) {
-    sortValueTotal += this.pathCommands[i].endRenderPoint.z;
+    var endPoint = this.pathCommands[i].endRenderPoint;
+    this.isClipped = this.isClipped || endPoint.isClipped();
+    sortValueTotal += endPoint.z;
   }
-  this.sortValue = sortValueTotal/pointCount;
+  this.sortValue = this.isClipped ? Infinity : sortValueTotal/pointCount;
 };
 
 // ----- render ----- //
 
 Shape.prototype.render = function( ctx, renderer ) {
   var length = this.pathCommands.length;
-  if ( !this.visible || !length ) {
+  // do not render clipped items, geometry cannot be projected
+  if ( !this.visible || !length || this.isClipped ) {
     return;
   }
   // do not render if hiding backface
@@ -1273,7 +1317,8 @@ Shape.prototype.getLineWidth = function() {
   if ( this.stroke == true ) {
     return 1;
   }
-  return this.stroke;
+  // guard against non-finite stroke values
+  return isFinite( this.stroke ) ? this.stroke : 0;
 };
 
 Shape.prototype.getRenderColor = function() {
@@ -1345,7 +1390,10 @@ Group.prototype.updateSortValue = function() {
   } );
   // average sort value of all points
   // def not geometrically correct, but works for me
-  this.sortValue = sortValueTotal / this.flatGraph.length;
+  var sortValue = sortValueTotal / this.flatGraph.length;
+  // guard empty groups & clipped children producing non-finite values
+  this.isClipped = !isFinite( sortValue );
+  this.sortValue = this.isClipped ? Infinity : sortValue;
 
   if ( this.updateSort ) {
     this.flatGraph.sort( Anchor.shapeSorter );

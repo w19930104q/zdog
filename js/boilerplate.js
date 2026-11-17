@@ -25,6 +25,13 @@ var Zdog = {};
 
 Zdog.TAU = Math.PI * 2;
 
+// max renderable coordinate magnitude. Geometry with coordinates beyond
+// this guard band, or with non-finite (NaN/Infinity) coordinates, cannot
+// be reliably projected to canvas/SVG. It is clipped — treated like
+// geometry crossing the camera near plane — so it cannot corrupt
+// bounds, sorting, or subsequent frames with NaN
+Zdog.maxCoordinate = 1000000000;
+
 Zdog.extend = function( a, b ) {
   for ( var prop in b ) {
     a[ prop ] = b[ prop ];

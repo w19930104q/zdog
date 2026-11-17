@@ -109,6 +109,10 @@ Shape.prototype.transform = function( translation, rotation, scale ) {
 };
 
 Shape.prototype.updateSortValue = function() {
+  // clip items with non-finite or extreme coordinates, so they cannot
+  // corrupt sorting, bounds, or the renderer with NaN
+  this.isClipped = this.renderOrigin.isClipped() ||
+    this.renderFront.isClipped();
   // sort by average z of all points
   // def not geometrically correct, but works for me
   var pointCount = this.pathCommands.length;
@@ -122,16 +126,19 @@ Shape.prototype.updateSortValue = function() {
 
   var sortValueTotal = 0;
   for ( var i = 0; i < pointCount; i++ ) {
-    sortValueTotal += this.pathCommands[i].endRenderPoint.z;
+    var endPoint = this.pathCommands[i].endRenderPoint;
+    this.isClipped = this.isClipped || endPoint.isClipped();
+    sortValueTotal += endPoint.z;
   }
-  this.sortValue = sortValueTotal/pointCount;
+  this.sortValue = this.isClipped ? Infinity : sortValueTotal/pointCount;
 };
 
 // ----- render ----- //
 
 Shape.prototype.render = function( ctx, renderer ) {
   var length = this.pathCommands.length;
-  if ( !this.visible || !length ) {
+  // do not render clipped items, geometry cannot be projected
+  if ( !this.visible || !length || this.isClipped ) {
     return;
   }
   // do not render if hiding backface
@@ -173,7 +180,8 @@ Shape.prototype.getLineWidth = function() {
   if ( this.stroke == true ) {
     return 1;
   }
-  return this.stroke;
+  // guard against non-finite stroke values
+  return isFinite( this.stroke ) ? this.stroke : 0;
 };
 
 Shape.prototype.getRenderColor = function() {

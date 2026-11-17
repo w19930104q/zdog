@@ -18,12 +18,17 @@
 
 var TAU = utils.TAU;
 var onePoint = { x: 1, y: 1, z: 1 };
+// incrementing id, used as tie-breaker for stable sorting
+var idCount = 0;
 
 function Anchor( options ) {
   this.create( options || {} );
 }
 
 Anchor.prototype.create = function( options ) {
+  // unique id within session, keeps sort order deterministic
+  this.id = idCount;
+  idCount += 1;
   this.children = [];
   // set defaults & options
   utils.extend( this, this.constructor.defaults );
@@ -117,8 +122,22 @@ Anchor.prototype.updateGraph = function() {
   this.flatGraph.sort( Anchor.shapeSorter );
 };
 
+// total-order sorter, stable on every engine:
+// clipped items (non-finite sortValue) sort to the end,
+// equal sort values (e.g. zero-depth scenes) keep creation order
 Anchor.shapeSorter = function( a, b ) {
-  return a.sortValue - b.sortValue;
+  var isFiniteA = isFinite( a.sortValue );
+  var isFiniteB = isFinite( b.sortValue );
+  if ( !isFiniteA || !isFiniteB ) {
+    if ( isFiniteA ) {
+      return -1;
+    }
+    if ( isFiniteB ) {
+      return 1;
+    }
+    return a.id - b.id;
+  }
+  return a.sortValue - b.sortValue || a.id - b.id;
 };
 
 // custom getter to check for flatGraph before using it
@@ -153,7 +172,9 @@ Anchor.prototype.addChildFlatGraph = function( flatGraph ) {
 };
 
 Anchor.prototype.updateSortValue = function() {
-  this.sortValue = this.renderOrigin.z;
+  this.isClipped = this.renderOrigin.isClipped();
+  // clipped items are sorted to the end of the graph
+  this.sortValue = this.isClipped ? Infinity : this.renderOrigin.z;
 };
 
 // ----- render ----- //
@@ -230,7 +251,7 @@ function getSubclass( Super ) {
     Item.optionKeys = Super.optionKeys.slice( 0 );
     // add defaults keys to optionKeys, dedupe
     Object.keys( Item.defaults ).forEach( function( key ) {
-      if ( !Item.optionKeys.indexOf( key ) != 1 ) {
+      if ( Item.optionKeys.indexOf( key ) == -1 ) {
         Item.optionKeys.push( key );
       }
     } );

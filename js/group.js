@@ -29,7 +29,10 @@ Group.prototype.updateSortValue = function() {
   } );
   // average sort value of all points
   // def not geometrically correct, but works for me
-  this.sortValue = sortValueTotal / this.flatGraph.length;
+  var sortValue = sortValueTotal / this.flatGraph.length;
+  // guard empty groups & clipped children producing non-finite values
+  this.isClipped = !isFinite( sortValue );
+  this.sortValue = this.isClipped ? Infinity : sortValue;
 
   if ( this.updateSort ) {
     this.flatGraph.sort( Anchor.shapeSorter );

@@ -152,6 +152,15 @@ Vector.prototype.magnitude2d = function() {
   return getMagnitudeSqrt( sum );
 };
 
+// check if vector cannot be reliably projected: any coordinate is
+// non-finite (NaN/Infinity) or beyond the maxCoordinate guard band
+Vector.prototype.isClipped = function() {
+  var max = utils.maxCoordinate;
+  return !isFinite( this.x ) || !isFinite( this.y ) || !isFinite( this.z ) ||
+    Math.abs( this.x ) > max || Math.abs( this.y ) > max ||
+    Math.abs( this.z ) > max;
+};
+
 Vector.prototype.copy = function() {
   return new Vector( this );
 };
